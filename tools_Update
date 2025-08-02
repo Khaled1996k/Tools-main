@@ -1,1 +1,2278 @@
+# Developed by Khaled Halabi @khaled1261
+import sys
+import os
+import csv
+import time
+import asyncio
+import re
+import json
+import uuid
+import requests
+import hashlib
+import socks
+import sqlite3
+import subprocess
+import random  # ✅ تم إضافته لتجنب الكاش
+from datetime import datetime, timedelta, timezone
+from threading import Thread
+from telethon import TelegramClient, errors, functions, types
+from telethon.errors import FloodWaitError, UserPrivacyRestrictedError, PhoneCodeInvalidError, SessionPasswordNeededError
+from telethon.tl.functions.messages import GetHistoryRequest
+from telethon.tl.functions.channels import GetFullChannelRequest, GetParticipantsRequest, InviteToChannelRequest, JoinChannelRequest, EditAdminRequest
+from telethon.tl.types import ChannelParticipantsSearch, ChatAdminRights, ChannelParticipantsAdmins
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+from rich.prompt import Prompt
+from rich.table import Table
+from rich.progress import Progress, DownloadColumn, BarColumn, TextColumn, SpinnerColumn
+from colorama import init, Fore, Back, Style
+import configparser
 
+# Initialize colorama
+init(autoreset=True)
+console = Console()
+
+# --- START: Handling config.ini ---
+CONFIG_FILE = "config.ini"
+API_ID = None
+API_HASH = None
+
+def load_config():
+    global API_ID, API_HASH
+    if not os.path.exists(CONFIG_FILE):
+        config = configparser.ConfigParser()
+        config["Settings"] = {
+            "api_id": "",
+            "api_hash": ""
+        }
+        config["Paths"] = {
+            "sessions_dir": "sessions"
+        }
+        with open(CONFIG_FILE, "w") as f:
+            config.write(f)
+        console.print(f"[yellow]Created {CONFIG_FILE}. Please fill in api_id and api_hash when needed.[/yellow]")
+    else:
+        config = configparser.ConfigParser()
+        config.read(CONFIG_FILE)
+        try:
+            api_id_str = config.get("Settings", "api_id", fallback="").strip()
+            api_hash_str = config.get("Settings", "api_hash", fallback="").strip()
+            if api_id_str and api_hash_str:
+                API_ID = int(api_id_str)
+                API_HASH = api_hash_str
+        except Exception as e:
+            console.print(f"[red]Warning: Failed to read api_id or api_hash from {CONFIG_FILE}: {e}[/red]")
+
+load_config()  # Load settings on startup
+
+# --- END: Handling config.ini ---
+# --- Define paths ---
+SESSIONS_DIR = "sessions"
+if os.path.exists("config.ini"):
+    config_temp = configparser.ConfigParser()
+    config_temp.read("config.ini")
+    SESSIONS_DIR = config_temp.get("Paths", "sessions_dir", fallback="sessions")
+os.makedirs(SESSIONS_DIR, exist_ok=True)
+
+BANNED_ACCOUNTS_FILE = "accounts_banned.txt"
+VALID_CSV_FILE = "valid_members.csv"
+CSV_FILE = "scraped_members.csv"
+GROUP_FILE = "group.txt"
+PROGRESS_FILE = "progress.txt"
+ACTIVATION_FILE = "activation.json"
+USERNAMES_CSV = "usernames.csv"
+MEMBERS_FILE = "members.csv"
+INVITE_LINKS_FILE = "invite_links.txt"
+MESSAGE_FILE = "message.txt"
+GROUP_DATA_DIR = "groups_data"
+
+# Activation, subscription and update settings
+# ✅ تم تحديث الروابط إلى GitHub مع إزالة %2520 واستخدام روابط Raw مباشرة
+ACTIVATION_SERVER = "https://raw.githubusercontent.com/Khaled1996k/telegram-tools-updates/main/activation.txt"
+SUBSCRIPTION_SERVER = "https://raw.githubusercontent.com/Khaled1996k/telegram-tools-updates/main/subscriptions.txt"
+VERSION_SERVER = "https://raw.githubusercontent.com/Khaled1996k/telegram-tools-updates/main/version.txt"
+NEW_MAIN3_PY_DOWNLOAD_URL = "https://raw.githubusercontent.com/Khaled1996k/telegram-tools-updates/main/main3.py"
+CURRENT_VERSION = "1.0"  # ✅ تم تغيير الإصدار إلى 1.0
+CHECK_INTERVAL = 10800  # 3 hours
+UPDATE_GRACE_PERIOD = 172800  # 2 days in seconds (48 hours)
+
+def clear_screen():
+    os.system("cls" if os.name == "nt" else "clear")
+
+# Helper function to create directories and files
+def ensure_files_and_directories():
+    console.print("[bold blue]Ensuring necessary files and directories exist...[/bold blue]")
+    directories = [SESSIONS_DIR, "web", "java", "templates", GROUP_DATA_DIR]
+    for directory in directories:
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+            console.print(f"[green]Created directory: {directory}[/green]")
+
+    text_files = [BANNED_ACCOUNTS_FILE, GROUP_FILE, PROGRESS_FILE, INVITE_LINKS_FILE, MESSAGE_FILE]
+    for f in text_files:
+        if not os.path.exists(f):
+            with open(f, "w", encoding="utf-8") as file:
+                if f == MESSAGE_FILE:
+                    file.write("Hello [username], this is a test message from our automated system.\nPlease replace this text with your actual message content.")
+                else:
+                    pass
+            console.print(f"[green]Created file: {f}[/green]")
+
+    csv_files = [VALID_CSV_FILE, CSV_FILE, USERNAMES_CSV, MEMBERS_FILE]
+    for f in csv_files:
+        if not os.path.exists(f):
+            with open(f, "w", newline="", encoding="utf-8") as file:
+                writer = csv.writer(file)
+                if f in [CSV_FILE, VALID_CSV_FILE]:
+                    writer.writerow(["id", "access_hash", "username"])
+                elif f in [USERNAMES_CSV, MEMBERS_FILE]:
+                    writer.writerow(["username"])
+            console.print(f"[green]Created CSV file: {f}[/green]")
+
+    if not os.path.exists(ACTIVATION_FILE):
+        with open(ACTIVATION_FILE, "w") as file:
+            json.dump({}, file)
+        console.print(f"[green]Created JSON file: {ACTIVATION_FILE}[/green]")
+
+    create_java_and_html_files()
+    console.print("[bold blue]All necessary files and directories are in place.[/bold blue]")
+
+def create_java_and_html_files():
+    """Create template Java and HTML files"""
+    java_bot_content = '''/**
+ * Telegram Bot Template
+ * Developed by Khaled Halabi @khaled1261
+ */
+import java.io.*;
+import java.net.*;
+import java.util.*;
+import org.json.*;
+public class TelegramBot {
+    private String botToken;
+    private String apiUrl;
+    public TelegramBot(String token) {
+        this.botToken = token;
+        this.apiUrl = "https://api.telegram.org/bot" + token + "/";
+    }
+    public String sendMessage(String chatId, String text) {
+        try {
+            String urlString = apiUrl + "sendMessage";
+            URL url = new URL(urlString);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setDoOutput(true);
+            JSONObject payload = new JSONObject();
+            payload.put("chat_id", chatId);
+            payload.put("text", text);
+            payload.put("parse_mode", "HTML");
+            try (OutputStream os = connection.getOutputStream()) {
+                byte[] input = payload.toString().getBytes("utf-8");
+                os.write(input, 0, input.length);
+            }
+            try (BufferedReader br = new BufferedReader(
+                    new InputStreamReader(connection.getInputStream(), "utf-8"))) {
+                StringBuilder response = new StringBuilder();
+                String responseLine;
+                while ((responseLine = br.readLine()) != null) {
+                    response.append(responseLine.trim());
+                }
+                return response.toString();
+            }
+        } catch (Exception e) {
+            System.err.println("Error sending message: " + e.getMessage());
+            return null;
+        }
+    }
+    public void handleTextMessage(String chatId, String text) {
+        if (text.equals("/start")) {
+            sendMessage(chatId, "Hello! I am a Telegram bot developed by Khaled Halabi @khaled1261");
+        } else if (text.equals("/help")) {
+            sendMessage(chatId, "Available commands:\\n/start - Start conversation\\n/help - Show help\\n/contact - Contact information");
+        } else if (text.equals("/contact")) {
+            sendMessage(chatId, "To contact the developer: @khaled1261");
+        } else {
+            sendMessage(chatId, "Thank you for your message! For help type /help");
+        }
+    }
+    public static void main(String[] args) {
+        String botToken = "YOUR_BOT_TOKEN_HERE";
+        if (botToken.equals("YOUR_BOT_TOKEN_HERE")) {
+            System.err.println("Please set your bot token first!");
+            System.err.println("Get your token from @BotFather on Telegram");
+            return;
+        }
+        TelegramBot bot = new TelegramBot(botToken);
+        System.out.println("Bot started successfully! Contact @khaled1261 for support.");
+    }
+}'''
+
+    html_contact_content = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contact Developer - Khaled Halabi</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+            animation: slideUp 0.8s ease-out;
+        }
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .developer-info {
+            margin-bottom: 30px;
+        }
+        .avatar {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            display: flex;
+            align-items: center;
+            justify-content; center;
+            margin: 0 auto 20px;
+            font-size: 40px;
+            color: white;
+            font-weight: bold;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+        }
+        .developer-name {
+            font-size: 28px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .developer-title {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 20px;
+        }
+        .telegram-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #0088cc, #005580);
+            color: white;
+            text-decoration: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 18px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(0, 136, 204, 0.3);
+            margin: 10px;
+        }
+        .telegram-button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 40px rgba(0, 136, 204, 0.4);
+            background: linear-gradient(135deg, #0099dd, #006699);
+        }
+        .telegram-icon {
+            margin-right: 10px;
+            font-size: 20px;
+        }
+        .activation-info {
+            background: linear-gradient(135deg, #ffeaa7, #fdcb6e);
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+        }
+        .activation-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #2d3436;
+            margin-bottom: 10px;
+        }
+        .activation-id {
+            font-family: 'Courier New', monospace;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #2d3436;
+            word-break: break-all;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="developer-info">
+            <div class="avatar">KH</div>
+            <div class="developer-name">Khaled Halabi</div>
+            <div class="developer-title">Telegram Application Developer</div>
+        </div>
+        <div class="activation-info">
+            <div class="activation-title">Your Activation ID</div>
+            <div class="activation-id" id="activationId">Will be updated automatically</div>
+        </div>
+        <a href="https://t.me/khaled1261" class="telegram-button" target="_blank">
+            <span class="telegram-icon">&#x1F4F2;</span>
+            Contact via Telegram
+        </a>
+        <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #888; font-size: 12px;">
+            <p>&copy; 2024 Khaled Halabi - All rights reserved</p>
+        </div>
+    </div>
+</body>
+</html>'''
+
+    java_file = os.path.join("java", "TelegramBot.java")
+    html_file = os.path.join("web", "contact.html")
+    if not os.path.exists(java_file):
+        with open(java_file, "w", encoding="utf-8") as f:
+            f.write(java_bot_content)
+        console.print(f"[green]Created Java file: {java_file}[/green]")
+    if not os.path.exists(html_file):
+        with open(html_file, "w", encoding="utf-8") as f:
+            f.write(html_contact_content)
+        console.print(f"[green]Created HTML file: {html_file}[/green]")
+
+# --- Function to add new accounts with full login ---
+async def add_new_accounts():
+    """Add new accounts with full login process before saving to phone.csv"""
+    try:
+        num = int(Prompt.ask("How many accounts do you want to add?"))
+        if num <= 0:
+            console.print("[red]Number must be greater than zero.[/red]")
+            return
+    except ValueError:
+        console.print("[red]Please enter a valid number.[/red]")
+        return
+
+    phone_file = "phone.csv"
+    file_exists = os.path.exists(phone_file)
+
+    added_phones = []
+
+    # قراءة الأرقام الموجودة في phone.csv
+    existing_phones = set()
+    if file_exists:
+        with open(phone_file, "r", encoding="utf-8") as f:
+            for line in f:
+                phone = line.strip()
+                if phone:
+                    existing_phones.add(phone)
+
+    for i in range(num):
+        phone = Prompt.ask(f"[cyan]Enter phone number for account {i+1}[/cyan]").strip()
+        while not phone:
+            console.print("[red]Phone number cannot be empty.[/red]")
+            phone = Prompt.ask(f"[cyan]Enter phone number for account {i+1}[/cyan]").strip()
+
+        # التحقق من وجود الرقم
+        if phone in existing_phones:
+            console.print(f"[yellow]The phone number {phone} already exists in the file. Skipping...[/yellow]")
+            continue
+
+        session_file = os.path.join(SESSIONS_DIR, phone)
+        client = TelegramClient(session_file, API_ID, API_HASH)
+
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                try:
+                    await client.send_code_request(phone)
+                except Exception as e:
+                    console.print(f"[red]Failed to send code: {e}[/red]")
+                    await client.disconnect()
+                    continue
+
+                for attempt in range(3):
+                    code = Prompt.ask(f"Enter the code for {phone} (Attempt {attempt+1}/3)")
+                    try:
+                        await client.sign_in(phone, code)
+                        break
+                    except PhoneCodeInvalidError:
+                        console.print("[red]Invalid code. Try again.[/red]")
+                    except SessionPasswordNeededError:
+                        password = Prompt.ask("2FA enabled. Enter password", password=True)
+                        try:
+                            await client.sign_in(password=password)
+                            break
+                        except Exception as e:
+                            console.print(f"[red]2FA login failed: {e}[/red]")
+                            await client.disconnect()
+                            continue
+                    except Exception as e:
+                        console.print(f"[red]Login failed: {e}[/red]")
+                        await client.disconnect()
+                        continue
+                else:
+                    console.print(f"[red]Failed to login {phone} after 3 attempts.[/red]")
+                    await client.disconnect()
+                    continue
+
+            console.print(f"[green]Successfully logged in: {phone}[/green]")
+            added_phones.append(phone)
+            await client.disconnect()
+        except Exception as e:
+            console.print(f"[red]Error connecting to {phone}: {e}[/red]")
+            continue
+
+    # Save only successfully logged-in phones
+    if added_phones:
+        with open(phone_file, mode='a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(['phone'])
+            for phone in added_phones:
+                writer.writerow([phone])
+        console.print(f"[green]Successfully added {len(added_phones)} account(s) to {phone_file}[/green]")
+    else:
+        console.print("[yellow]No accounts were successfully added.[/yellow]")
+
+# --- End of the new function ---
+
+# Enhanced activation system (single protection only)
+class ActivationSystem:
+    def __init__(self):
+        self.current_id = None
+        self.activated = False
+        self.subscribed = False
+        self.last_check = None
+        self._last_activation_status = None
+        self._last_subscription_status = None
+        self.new_update_available = False
+        self.latest_version = CURRENT_VERSION
+        self.last_update_check_time = None
+        self.version_at_last_update_check = CURRENT_VERSION
+        self.update_reminder_shown = False  # ✅ متغير جديد لتتبع عرض التذكير
+
+    def load_or_generate_id(self):
+        if os.path.exists(ACTIVATION_FILE):
+            try:
+                with open(ACTIVATION_FILE, 'r') as f:
+                    data = json.load(f)
+                    self.current_id = data.get("activation_id")
+                    self.last_update_check_time = datetime.strptime(data.get("last_update_check_time"), "%Y-%m-%d %H:%M:%S") if data.get("last_update_check_time") else None
+                    self.version_at_last_update_check = data.get("version_at_last_update_check", CURRENT_VERSION)
+                    self.update_reminder_shown = data.get("update_reminder_shown", False)  # ✅ تحميل حالة التذكير
+                    if self.current_id:
+                        return True
+            except Exception as e:
+                console.print(f"[red]Error loading local activation ID: {e}[/red]")
+        self.current_id = str(uuid.uuid4())
+        self.save_local_activation()
+        return True
+
+    def check_activation(self):
+        try:
+            self.last_check = datetime.now()
+            # ✅ إضافة معلمة عشوائية لتجنب الكاش
+            url = f"{ACTIVATION_SERVER}?v={random.randint(1000, 9999)}"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            active_ids = response.text.splitlines()
+            if self.current_id in active_ids:
+                current_status = True
+            else:
+                current_status = False
+            if current_status != self._last_activation_status:
+                if current_status:
+                    console.print("[green]Activation ID found on server. Your activation is valid![/green]")
+                else:
+                    console.print("[red]Failed to check activation.[/red]")  # ✅ إخفاء الرابط
+                self._last_activation_status = current_status
+            return current_status
+        except Exception as e:
+            console.print("[red]Failed to check activation.[/red]")  # ✅ إخفاء الرابط
+            return False
+
+    def check_subscription(self):
+        try:
+            # ✅ إضافة معلمة عشوائية لتجنب الكاش
+            url = f"{SUBSCRIPTION_SERVER}?v={random.randint(1000, 9999)}"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            subscribed_ids = response.text.splitlines()
+            if self.current_id in subscribed_ids:
+                current_status = True
+            else:
+                current_status = False
+            if current_status != self._last_subscription_status:
+                if current_status:
+                    console.print("[green]Subscription found on server. You are subscribed![/green]")
+                else:
+                    console.print("[red]Failed to check subscription.[/red]")  # ✅ إخفاء الرابط
+                self._last_subscription_status = current_status
+            self.subscribed = current_status
+            console.print(f"[bold yellow]DEBUG: Current Activation ID: {self.current_id}[/bold yellow]")
+            console.print(f"[bold yellow]DEBUG: Subscription Status: {self.subscribed}[/bold yellow]")
+            return current_status
+        except Exception as e:
+            console.print("[red]Failed to check subscription.[/red]")  # ✅ إخفاء الرابط
+            self.subscribed = False
+            return False
+
+    def check_for_updates(self):
+        try:
+            # ✅ إضافة معلمة عشوائية لتجنب الكاش
+            url = f"{VERSION_SERVER}?v={random.randint(1000, 9999)}"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            latest_version = response.text.strip()
+            console.print(f"[bold yellow]DEBUG: Fetched Latest Version from GitHub: {latest_version}[/bold yellow]")
+            if latest_version != CURRENT_VERSION:
+                self.new_update_available = True
+                self.latest_version = latest_version
+                # Store the time when a new update was detected
+                if self.version_at_last_update_check == CURRENT_VERSION:
+                    self.last_update_check_time = datetime.now()
+                    self.version_at_last_update_check = latest_version
+                    self.save_local_activation()
+                return True
+            else:
+                self.new_update_available = False
+                self.latest_version = CURRENT_VERSION
+                return False
+        except requests.exceptions.RequestException as e:
+            console.print(f"[red]Failed to check for updates: {e}[/red]")
+            self.new_update_available = False
+            self.latest_version = CURRENT_VERSION
+            return False
+        except Exception as e:
+            console.print(f"[red]An unexpected error occurred during update check: {e}[/red]")
+            self.new_update_available = False
+            self.latest_version = CURRENT_VERSION
+            return False
+
+    def force_shutdown(self, reason="Activation has been deactivated by developer"):
+        console.print(Panel(
+            f"[bold red]{reason}[/bold red]\n"
+            "Please contact support for assistance.",
+            style="red"
+        ))
+        os._exit(1)
+
+    def save_local_activation(self):
+        data = {
+            "activation_id": self.current_id,
+            "last_check": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "last_update_check_time": self.last_update_check_time.strftime("%Y-%m-%d %H:%M:%S") if self.last_update_check_time else None,
+            "version_at_last_update_check": self.version_at_last_update_check,
+            "update_reminder_shown": self.update_reminder_shown  # ✅ حفظ حالة التذكير
+        }
+        with open(ACTIVATION_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+
+# Initialize activation system
+activation_system = ActivationSystem()
+
+def background_activation_check():
+    while True:
+        time.sleep(CHECK_INTERVAL)
+        # Periodically check activation and subscription
+        activation_system.check_activation()
+        activation_system.check_subscription()
+        activation_system.check_for_updates() # Periodically check for updates
+Thread(target=background_activation_check, daemon=True).start()
+
+def check_subscription_for_feature():
+    """Check subscription status and show subscription message if not subscribed"""
+    if not activation_system.subscribed:
+        console.print(Panel(
+            "[bold red]Subscription Required![/bold red]\n"
+            "This feature requires an active subscription.\n"
+            f"Your Activation ID: [cyan]{activation_system.current_id}[/cyan]\n"
+            "Please send this ID to the developer (@khaled1261) to subscribe and unlock all features.",
+            title="Subscription Required", 
+            style="red", 
+            padding=(1, 4)
+        ))
+        Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+        return False
+    return True
+
+def subscription_required_decorator(func):
+    async def wrapper(*args, **kwargs):
+        # Allow developer services to bypass subscription check
+        unrestricted_functions = [
+            "run_account_check", "scrape_active_members", 
+            "scrape_members_from_group", "scrape_members_from_messages", "add_members_multi_accounts", 
+            "add_members_multi_accounts_by_id", "add_contacts_flow", "delete_contacts", 
+            "collect_usernames", "set_usernames", "delete_usernames",
+            "update_tools", "main_menu"
+        ]
+        if func.__name__ not in unrestricted_functions and not activation_system.subscribed:
+            console.print(Panel(
+                "[bold red]Subscription Required![/bold red]\n"
+                "This feature requires an active subscription.\n"
+                f"Your Activation ID: [cyan]{activation_system.current_id}[/cyan]\n"
+                "Please send this ID to the developer (@khaled1261) to subscribe and unlock all features.",
+                title="Subscription Required", 
+                style="red", 
+                padding=(1, 4)
+            ))
+            Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+            return
+        return await func(*args, **kwargs)
+    return wrapper
+
+def activation_required():
+    activation_system.load_or_generate_id()
+    # Initial check on startup
+    is_activated = activation_system.check_activation()
+    is_subscribed = activation_system.check_subscription()
+    if is_activated:
+        console.print("[green]Your activation is valid![/green]")
+        activation_system.activated = True
+        # Check for mandatory update after grace period
+        if activation_system.new_update_available and not activation_system.subscribed:
+            if activation_system.last_update_check_time:
+                time_since_update_detected = datetime.now() - activation_system.last_update_check_time
+                if time_since_update_detected.days >= GRACE_PERIOD_DAYS:
+                    activation_system.force_shutdown(
+                        f"A mandatory update (Version {activation_system.latest_version}) is available and the grace period of {GRACE_PERIOD_DAYS} days has expired.\n"
+                        f"Your Activation ID: [cyan]{activation_system.current_id}[/cyan]\n"
+                        "Please subscribe and update your tools to continue using the application."
+                    )
+            else:
+                activation_system.force_shutdown(
+                    f"A mandatory update (Version {activation_system.latest_version}) is available and the grace period has expired.\n"
+                    f"Your Activation ID: [cyan]{activation_system.current_id}[/cyan]\n"
+                    "Please subscribe and update your tools to continue using the application."
+                )
+                return True
+    else:
+        console.print(Panel(
+            "[bold yellow]Your Activation ID:[/bold yellow]\n"
+            f"[cyan]{activation_system.current_id}[/cyan]\n"
+            "Please send this ID to the developer for activation.",
+            title="Activation Required", 
+            style="yellow on black", 
+            padding=(1, 4)
+        ))
+        return False
+
+def load_local_activation():
+    if os.path.exists(ACTIVATION_FILE):
+        try:
+            with open(ACTIVATION_FILE, 'r') as f:
+                data = json.load(f)
+                activation_system.current_id = data.get("activation_id")
+                activation_system.last_check = datetime.strptime(data.get("last_check"), "%Y-%m-%d %H:%M:%S") if data.get("last_check") else None
+                return data
+        except:
+            pass
+    return None
+
+# --- Load accounts from phone.csv only ---
+def load_accounts():
+    accounts = []
+    if not os.path.exists("phone.csv"):
+        console.print(f"[red bold]Please create phone.csv with phone numbers (one per line)[/red bold]")
+        return accounts
+    with open("phone.csv", "r") as f:
+        for line in f:
+            phone = line.strip()
+            if phone:
+                accounts.append({"phone": phone, "api_id": API_ID, "api_hash": API_HASH})
+    return accounts
+
+def save_accounts(accounts):
+    # No longer needed, removed
+    pass
+
+# Login functions
+async def login_account_async(account):
+    if not API_ID or not API_HASH:
+        console.print(f"[red bold]API ID or API Hash not set in {CONFIG_FILE}[/red bold]")
+        return None
+    session_file = os.path.join(SESSIONS_DIR, account["phone"])
+    client = TelegramClient(session_file, account["api_id"], account["api_hash"])
+    try:
+        await client.start(phone=account["phone"])
+        console.print(f"[green bold]Logged in successfully: {account['phone']}[/green bold]")
+        return client
+    except Exception as e:
+        console.print(f"[red bold]Failed to login {account['phone']}: {e}[/red bold]")
+        await client.disconnect()
+        return None
+
+async def login_account_async_with_prompt(account):
+    if not API_ID or not API_HASH:
+        console.print(f"[red bold]API ID or API Hash not set in {CONFIG_FILE}[/red bold]")
+        return None
+    session_file = os.path.join(SESSIONS_DIR, account['phone'])
+    client = TelegramClient(session_file, account["api_id"], account["api_hash"])
+    console.print(f"[cyan bold]Logging in to account: {account['phone']}[/cyan bold]")
+    try:
+        await client.connect()
+    except sqlite3.OperationalError as e:
+        console.print(f"[red bold]Database locked for {account['phone']}: {e}. Retrying...[/red bold]")
+        await client.connect()
+    if not await client.is_user_authorized():
+        try:
+            await client.send_code_request(account["phone"])
+        except Exception as e:
+            console.print(f"[red bold]Failed to send code request for {account['phone']}: {e}[/red bold]")
+            await client.disconnect()
+            return None
+        for attempt in range(3):
+            code = Prompt.ask(f"Enter the code for {account['phone']} (Attempt {attempt+1}/3)", default="")
+            try:
+                await client.sign_in(account["phone"], code)
+                console.print(f"[green bold]Logged in successfully: {account['phone']}[/green bold]")
+                return client
+            except errors.SessionPasswordNeededError:
+                password = Prompt.ask(f"2FA enabled. Enter password for {account['phone']}", default="", password=True)
+                try:
+                    await client.sign_in(password=password)
+                    console.print(f"[green bold]Logged in successfully with 2FA: {account['phone']}[/green bold]")
+                    return client
+                except Exception as e:
+                    console.print(f"[red bold]2FA login failed for {account['phone']}: {e}[/red bold]")
+                    await client.disconnect()
+                    return None
+            except errors.PhoneCodeInvalidError:
+                console.print(f"[red bold]Invalid code entered for {account['phone']}. Try again.[/bold red]")
+            except Exception as e:
+                console.print(f"[red bold]Failed to login {account['phone']}: {e}[/red bold]")
+                await client.disconnect()
+                return None
+        console.print(f"[red bold]Failed to login {account['phone']} after 3 attempts. Moving to next account.[/red bold]")
+        await client.disconnect()
+        return None
+    else:
+        console.print(f"[green bold]Already logged in: {account['phone']}[/green bold]")
+        return client
+
+# Function to add new account manually
+async def add_new_account_interactive():
+    console.print("[cyan bold]Adding new accounts manually[/cyan bold]")
+    # Not supported now
+    console.print("[yellow]This feature is disabled. Please add numbers to phone.csv[/yellow]")
+
+async def login_accounts_multi(accounts, count_to_login):
+    clients = []
+    count = min(count_to_login, len(accounts))
+    for i in range(count):
+        account = accounts[i]
+        client = await login_account_async_with_prompt(account)
+        if client:
+            clients.append(client)
+        else:
+            console.print(f"[bold red]❌  Skipping account {account['phone']} due to login failure.[/bold red]")
+    return clients
+
+# Account checking functions
+async def check_account_status(account):
+    if not API_ID or not API_HASH:
+        console.print(f"[red bold]API ID or API Hash not set[/red bold]")
+        return "error"
+    phone = account["phone"]
+    client = TelegramClient(os.path.join(SESSIONS_DIR, phone), account["api_id"], account["api_hash"])
+    try:
+        await client.start(phone=phone)
+        me = await client.get_me()
+        console.print(f"[green bold][OK] {phone} | @{me.username or 'N/A'} | ID: {me.id}[/green bold]")
+        await client.disconnect()
+        return "ok"
+    except errors.FloodWaitError as e:
+        console.print(f"[red bold][FloodWait] {phone} - Wait {e.seconds}s[/red bold]")
+        await client.disconnect()
+        return "ok"
+    except (errors.PhoneNumberInvalidError, errors.AuthKeyUnregisteredError):
+        console.print(f"[red bold][Banned/Invalid] {phone} - Removing from accounts.[/red bold]")
+        try:
+            await client.disconnect()
+        except:
+            pass
+        return "banned"
+    except Exception as e:
+        console.print(f"[red bold][Error] {phone} - {e}[/red bold]")
+        try:
+            await client.disconnect()
+        except:
+            pass
+        return "error"
+
+@subscription_required_decorator
+async def run_account_check():
+    accounts = load_accounts()
+    if not accounts:
+        return
+    console.print("[cyan bold]Checking account statuses...[/cyan bold]")
+    banned_accounts = []
+    updated_accounts = []
+    for acc in accounts:
+        status = await check_account_status(acc)
+        if status == "banned":
+            banned_accounts.append(acc)
+        else:
+            updated_accounts.append(acc)
+    if banned_accounts:
+        console.print(f"\n[red bold]Found {len(banned_accounts)} banned/invalid accounts. Removing them...[/bold red]")
+        with open(BANNED_ACCOUNTS_FILE, "w") as f:
+            for bacc in banned_accounts:
+                f.write(f"{bacc['phone']} {bacc['api_id']} {bacc['api_hash']}\n")
+        console.print(f"[green bold]Updated and saved banned accounts to {BANNED_ACCOUNTS_FILE}[/green bold]")
+    else:
+        console.print("[green bold]No banned accounts found.[/green bold]")
+
+async def login_all_accounts():
+    accounts = load_accounts()
+    if not accounts:
+        return
+    for acc in accounts:
+        await login_account_async_with_prompt(acc)
+
+# Scraping functions
+def init_csv_file(fieldnames):
+    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+def load_existing_ids(scrape_by):
+    existing_ids = set()
+    if os.path.isfile(CSV_FILE):
+        try:
+            with open(CSV_FILE, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if scrape_by == 'username':
+                        if row.get('username'):
+                            existing_ids.add(row['username'])
+                    else:
+                        if row.get('id'):
+                            existing_ids.add(int(row['id']))
+        except Exception as e:
+            console.print(f"[bold yellow]⚠ Warning reading CSV for duplicates: {e}[/bold yellow]")
+    return existing_ids
+
+@subscription_required_decorator
+async def scrape_active_members(client, group_identifier, max_members=None):
+    console.print(f"[bold blue]¤ Scraping active members from group: {group_identifier}[/bold blue]")
+    try:
+        entity = await client.get_entity(group_identifier)
+    except Exception as e:
+        console.print(f"[bold red]❌  Failed to get entity: {e}[/bold red]")
+        return False
+    # Reset progress when starting a new scrape operation
+    with open(PROGRESS_FILE, "w") as pf:
+        pf.write("0")
+    members_batch = []
+    count = 0
+    fieldnames = ['username']  # ✅ الكشط حسب username
+    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+    existing_ids = load_existing_ids('username')
+    offset = 0
+    limit_per_request = 200
+    ten_days_ago = datetime.now(timezone.utc) - timedelta(days=10)
+    while True:
+        try:
+            participants = await client(GetParticipantsRequest(
+                channel=entity,
+                filter=ChannelParticipantsSearch(''),
+                offset=offset,
+                limit=limit_per_request,
+                hash=0
+            ))
+        except FloodWaitError as e:
+            console.print(f"[bold yellow]⚠ FloodWaitError: waiting for {e.seconds} seconds...[/bold yellow]")
+            await asyncio.sleep(e.seconds + 5)
+            continue
+        except Exception as e:
+            console.print(f"[bold red]❌  Error while fetching participants: {e}[/bold red]")
+            break
+        users = participants.users
+        if not users:
+            break
+        for user in users:
+            if not user.username or user.username in existing_ids:
+                continue
+            if isinstance(user.status, types.UserStatusOnline):
+                is_active = True
+            elif isinstance(user.status, types.UserStatusOffline) and user.status.was_online:
+                is_active = user.status.was_online > ten_days_ago
+            elif isinstance(user.status, (types.UserStatusRecently, types.UserStatusLastWeek)):
+                is_active = True
+            else:
+                is_active = False
+            if is_active:
+                count += 1
+                if count <= 10 or count % 100 == 0:
+                    console.print(f"[bold blue]📌  {count} Scraped: [white]{user.first_name}[/white] [magenta]@{user.username}[/magenta][/bold blue]")
+                members_batch.append({'username': user.username})
+                existing_ids.add(user.username)
+                if len(members_batch) >= 100:
+                    with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
+                        writer = csv.DictWriter(f, fieldnames=fieldnames)
+                        writer.writerows(members_batch)
+                    members_batch.clear()
+                if max_members is not None and count >= max_members:
+                    console.print(f"[bold yellow]⚠  Reached the scraping limit of {max_members} members.[/bold yellow]")
+                    break
+        if max_members is not None and (count >= max_members or len(users) < limit_per_request):
+            break
+        offset += len(users)
+    if members_batch:
+        with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writerows(members_batch)
+    console.print(f"[bold cyan]📌  Total active members scraped: {count}[/bold cyan]")
+    console.print(f"[bold green]✅  Scraped active members saved to {CSV_FILE}[/bold green]")
+    return True
+
+# --- ✅ دالة جديدة: كشط الأعضاء النشطين حسب ID ---
+@subscription_required_decorator
+async def scrape_active_members_by_id(client, group_identifier, max_members=None):
+    console.print(f"[bold blue]¤ Scraping active members by ID from group: {group_identifier}[/bold blue]")
+    try:
+        entity = await client.get_entity(group_identifier)
+    except Exception as e:
+        console.print(f"[bold red]❌  Failed to get entity: {e}[/bold red]")
+        return False
+    # Reset progress when starting a new scrape operation
+    with open(PROGRESS_FILE, "w") as pf:
+        pf.write("0")
+    members_batch = []
+    count = 0
+    fieldnames = ['id', 'access_hash', 'username']
+    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+    existing_ids = load_existing_ids('id')
+    offset = 0
+    limit_per_request = 200
+    ten_days_ago = datetime.now(timezone.utc) - timedelta(days=10)
+    while True:
+        try:
+            participants = await client(GetParticipantsRequest(
+                channel=entity,
+                filter=ChannelParticipantsSearch(''),
+                offset=offset,
+                limit=limit_per_request,
+                hash=0
+            ))
+        except FloodWaitError as e:
+            console.print(f"[bold yellow]⚠ FloodWaitError: waiting for {e.seconds} seconds...[/bold yellow]")
+            await asyncio.sleep(e.seconds + 5)
+            continue
+        except Exception as e:
+            console.print(f"[bold red]❌  Error while fetching participants: {e}[/bold red]")
+            break
+        users = participants.users
+        if not users:
+            break
+        for user in users:
+            if user.id in existing_ids:
+                continue
+            if isinstance(user.status, types.UserStatusOnline):
+                is_active = True
+            elif isinstance(user.status, types.UserStatusOffline) and user.status.was_online:
+                is_active = user.status.was_online > ten_days_ago
+            elif isinstance(user.status, (types.UserStatusRecently, types.UserStatusLastWeek)):
+                is_active = True
+            else:
+                is_active = False
+            if is_active:
+                count += 1
+                if count <= 10 or count % 100 == 0:
+                    console.print(f"[bold blue]📌  {count} Scraped: [white]{user.first_name}[/white] [magenta]{user.id}[/magenta][/bold blue]")
+                members_batch.append({
+                    'id': user.id,
+                    'access_hash': user.access_hash,
+                    'username': user.username if user.username else ''
+                })
+                existing_ids.add(user.id)
+                if len(members_batch) >= 100:
+                    with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
+                        writer = csv.DictWriter(f, fieldnames=fieldnames)
+                        writer.writerows(members_batch)
+                    members_batch.clear()
+                if max_members is not None and count >= max_members:
+                    console.print(f"[bold yellow]⚠  Reached the scraping limit of {max_members} members.[/bold yellow]")
+                    break
+        if max_members is not None and (count >= max_members or len(users) < limit_per_request):
+            break
+        offset += len(users)
+    if members_batch:
+        with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writerows(members_batch)
+    console.print(f"[bold cyan]📌  Total active members scraped: {count}[/bold cyan]")
+    console.print(f"[bold green]✅  Scraped active members saved to {CSV_FILE}[/bold green]")
+    return True
+
+@subscription_required_decorator
+async def scrape_members_from_group(client, group_identifier, max_members=None, scrape_by='id'):
+    try:
+        entity = await client.get_entity(group_identifier)
+    except Exception as e:
+        console.print(f"[bold red]❌  Failed to get entity: {e}[/bold red]")
+        return False
+    try:
+        full_info = await client(GetFullChannelRequest(entity))
+        total_members = full_info.full_chat.participants_count if hasattr(full_info.full_chat, 'participants_count') else 'Unknown'
+    except Exception:
+        total_members = 'Unknown'
+    console.print(f"[bold blue]¤ Scraping members from group: {group_identifier}[/bold blue]")
+    console.print(f"[bold blue]¤ Total Members: {total_members}[/bold blue]")
+    console.print("[bold yellow]¤ Starting scraping by alphabetical letters to bypass 10,000 limit...[/bold yellow]")
+    # Reset progress when starting a new scrape operation
+    with open(PROGRESS_FILE, "w") as pf:
+        pf.write("0")
+    members_batch = []
+    count = 0
+    limit_per_request = 200
+    fieldnames = ['id', 'access_hash', 'username'] if scrape_by == 'id' else ['username']
+    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+    existing_ids = load_existing_ids(scrape_by)
+    letters = list("abcdefghijklmnopqrstuvwxyz0123456789")
+    for letter in letters:
+        offset = 0
+        while True:
+            try:
+                participants = await client(GetParticipantsRequest(
+                    channel=entity,
+                    filter=ChannelParticipantsSearch(letter),
+                    offset=offset,
+                    limit=limit_per_request,
+                    hash=0
+                ))
+            except FloodWaitError as e:
+                console.print(f"[bold yellow]⚠ FloodWaitError: waiting for {e.seconds} seconds...[/bold yellow]")
+                await asyncio.sleep(e.seconds + 5)
+                continue
+            except Exception as e:
+                console.print(f"[bold red]❌  Error while fetching participants with filter '{letter}': {e}[/bold red]")
+                break
+            users = participants.users
+            if not users:
+                break
+            for user in users:
+                if scrape_by == 'username':
+                    key = user.username if user.username else None
+                else:
+                    key = user.id
+                if key is None:
+                    continue
+                if key in existing_ids:
+                    continue
+                count += 1
+                if count <= 10 or count % 100 == 0:
+                    first_name = user.first_name if user.first_name else ""
+                    console.print(f"[bold blue]📌  {count} Scraped: [white]{first_name}[/white] [magenta]{key}[/magenta][/bold blue]")
+                if scrape_by == 'username':
+                    members_batch.append({'username': user.username})
+                else:
+                    members_batch.append({'id': user.id, 'access_hash': user.access_hash, 'username': user.username if user.username else ''})
+                existing_ids.add(key)
+                if len(members_batch) >= 100:
+                    with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
+                        writer = csv.DictWriter(f, fieldnames=fieldnames)
+                        writer.writerows(members_batch)
+                    members_batch.clear()
+                if max_members is not None and count >= max_members:
+                    console.print(f"[bold yellow]⚠  Reached the scraping limit of {max_members} members.[/bold yellow]")
+                    break
+            if max_members is not None and (count >= max_members or len(users) < limit_per_request):
+                break
+            offset += len(users)
+        if max_members is not None and count >= max_members:
+            break
+    if members_batch:
+        with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writerows(members_batch)
+    console.print(f"[bold cyan]📌  Total members scraped: {count}[/bold cyan]")
+    console.print(f"[bold green]✅  Scraped members saved to {CSV_FILE}[/bold green]")
+    return True
+
+async def scrape_members_from_group_by_username(client, group_identifier, max_members=None):
+    return await scrape_members_from_group(client, group_identifier, max_members=max_members, scrape_by='username')
+
+@subscription_required_decorator
+async def scrape_members_from_messages(client, target_entity, limit=None, scrape_by='id'):
+    # Reset progress when starting a new scrape operation
+    with open(PROGRESS_FILE, "w") as pf:
+        pf.write("0")
+    console.print(f"[bold blue]¤ Scraping members from messages in {target_entity} (limit={limit}, by={scrape_by}) ...[/bold blue]")
+    try:
+        entity = await client.get_entity(target_entity)
+    except Exception as e:
+        console.print(f"[bold red]❌  Failed to get entity: {e}[/bold red]")
+        return []
+    user_ids = set()
+    offset_id = 0
+    total_messages = 0
+    while total_messages < limit:
+        history = await client(GetHistoryRequest(
+            peer=entity,
+            limit=100,
+            offset_id=offset_id,
+            offset_date=None,
+            add_offset=0,
+            max_id=0,
+            min_id=0,
+            hash=0
+        ))
+        msgs = history.messages
+        if not msgs:
+            break
+        for msg in msgs:
+            uid = None
+            if hasattr(msg.from_id, 'user_id'):
+                uid = msg.from_id.user_id
+            elif msg.sender_id:
+                uid = msg.sender_id
+            if uid:
+                user_ids.add(uid)
+            total_messages += 1
+            console.print(f"[bold blue]📌  {total_messages}/{limit} Processed message from user ID: [magenta]{uid}[/magenta][/bold blue]")
+            if total_messages >= limit:
+                break
+        offset_id = msgs[-1].id
+    console.print(f"[bold green]✅  Found {len(user_ids)} unique sender IDs.[/bold green]")
+    all_members = {}
+    user_list = list(user_ids)
+    if scrape_by == 'username':
+        fieldnames = ['username']
+    else:
+        fieldnames = ['id', 'access_hash', 'username']
+    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+    existing_ids = load_existing_ids(scrape_by)
+    for uid in user_list:
+        if uid in existing_ids:
+            continue
+        try:
+            user_entity = await client.get_entity(uid)
+            all_members[user_entity.id] = {'access_hash': user_entity.access_hash, 'username': user_entity.username if user_entity.username else ''}
+            existing_ids.add(uid)
+        except Exception as e:
+            console.print(f"[bold yellow]⚠ Skipping user {uid} due to error: {e}[/bold yellow]")
+    console.print(f"[bold green]✅  Collected access_hash and usernames for {len(all_members)} users.[/bold green]")
+    members_batch = []
+    count = 0
+    for uid, data in all_members.items():
+        count += 1
+        if scrape_by == 'username':
+            if data['username'] and data['username'] not in existing_ids:
+                console.print(f"[bold blue]📌  {count}/{len(all_members)} Scraped username: [magenta]{data['username']}[/magenta][/bold blue]")
+                members_batch.append({"username": data['username']})
+                existing_ids.add(data['username'])
+        else:
+            console.print(f"[bold blue]📌  {count}/{len(all_members)} Scraped user ID: [magenta]{uid}[/magenta][/bold blue]")
+            members_batch.append({"id": uid, "access_hash": data['access_hash'], "username": data['username']})
+        if len(members_batch) >= 100:
+            with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writerows(members_batch)
+            members_batch.clear()
+    if members_batch:
+        with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writerows(members_batch)
+    console.print(f"[bold green]✅  Saved scraped members from messages to {CSV_FILE}[/bold green]")
+    return True
+
+async def scrape_members_from_messages_by_username(client, target_entity, limit=None):
+    return await scrape_members_from_messages(client, target_entity, limit, scrape_by='username')
+
+async def get_linked_group(client, channel_username):
+    try:
+        channel_entity = await client.get_entity(channel_username)
+        full = await client(GetFullChannelRequest(channel_entity))
+        linked_chat_id = getattr(full.full_chat, 'linked_chat_id', None)
+        if linked_chat_id:
+            linked_group = await client.get_entity(linked_chat_id)
+            console.print(f"[bold green]✅  Linked group found: {linked_group.title} (ID: {linked_group.id})[/bold green]")
+            return linked_group
+        else:
+            console.print(f"[bold yellow]⚠  No linked group found for this channel.[/bold yellow]")
+            return None
+    except Exception as e:
+        console.print(f"[bold red]❌  Failed to get linked group: {e}[/bold red]")
+        return None
+
+async def scrape_invite_links(client, channel_username, limit=100):
+    console.print(f"[bold blue]¤ Scraping invite links from messages in channel {channel_username} (limit={limit}) ...[/bold blue]")
+    try:
+        channel_entity = await client.get_entity(channel_username)
+        messages = await client.get_messages(channel_entity, limit=limit)
+        invite_links = set()
+        invite_pattern = re.compile(r"(https://t\.me/joinchat/[a-zA-Z0-9_-]+)")
+        for msg in messages:
+            if msg.message:
+                matches = invite_pattern.findall(msg.message)
+                for link in matches:
+                    invite_links.add(link)
+        if invite_links:
+            with open(INVITE_LINKS_FILE, "w", encoding="utf-8") as f:
+                for link in invite_links:
+                    f.write(link + "\n")
+            console.print(f"[bold green]✅  Found and saved {len(invite_links)} invite links to {INVITE_LINKS_FILE}[/bold green]")
+        else:
+            console.print(f"[bold yellow]⚠  No invite links found in recent messages.[/bold yellow]")
+    except Exception as e:
+        console.print(f"[bold red]❌  Failed to scrape invite links: {e}[/bold red]")
+
+# Adding functions
+async def join_channel(client, target_group):
+    try:
+        await client(JoinChannelRequest(target_group))
+        console.print(f"[green]Successfully joined the channel[/green]")
+        return True
+    except Exception as e:
+        console.print(f"[red]Failed to join channel: {e}[/red]")
+        return False
+
+# --- دالة الإضافة بالاسم المستخدم (الخيار 12) ---
+@subscription_required_decorator
+async def add_members_multi_accounts(accounts, target_group, delay_sec=5, max_add_per_account=None, peer_flood_delay=5):
+    if not target_group:
+        if os.path.exists(GROUP_FILE):
+            with open(GROUP_FILE, "r", encoding="utf-8") as f:
+                saved_group = f.read().strip()
+            use_saved = Prompt.ask(f"[?] Do you want to continue with the previous group [white]{saved_group}[/white]? (y/n)", choices=["y","n"])
+            if use_saved == 'y':
+                target_group = saved_group
+            else:
+                target_group = Prompt.ask("Enter new group name (username or link)")
+        else:
+            target_group = Prompt.ask("Enter group name (username or link)")
+    with open(GROUP_FILE, "w", encoding="utf-8") as f:
+        f.write(target_group)
+    members_file = CSV_FILE
+    if not os.path.isfile(members_file):
+        console.print(f"[red bold]File {members_file} does not exist. Please scrape members first.[/red bold]")
+        return
+    with open(members_file, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        members = list(reader)
+    if not members:
+        console.print(f"[red bold]No members found in {members_file}. Please ensure the file contains members with 'username' column.[/red bold]")
+        return
+    start_index = 0
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            with open(PROGRESS_FILE, "r") as pf:
+                start_index = int(pf.read().strip())
+        except:
+            start_index = 0
+    total_added = 0
+    added_counts = []
+
+    for i_account, account in enumerate(accounts, start=1):
+        console.print(f"\n[cyan bold]Using account #{i_account}: {account['phone']}[/cyan bold]")
+        try:
+            client = await login_account_async(account)
+            target_entity = await client.get_entity(target_group)
+            
+            # ✅ جلب عدد أعضاء المجموعة قبل الإضافة
+            try:
+                full_channel = await client(GetFullChannelRequest(target_entity))
+                initial_member_count = full_channel.full_chat.participants_count
+                console.print(f"[bold blue]Initial member count in the group: {initial_member_count}[/bold blue]")
+            except Exception as e:
+                console.print(f"[yellow]Could not fetch initial member count: {e}[/yellow]")
+                initial_member_count = None
+
+            console.print(f"[yellow]Attempting to join the channel...[/yellow]")
+            join_success = await join_channel(client, target_entity)
+            if not join_success:
+                console.print(f"[red]Skipping account as it failed to join the channel[/red]")
+                await client.disconnect()
+                continue
+        except Exception as e:
+            console.print(f"[red bold]Login/Get entity failed: {e}[/red bold]")
+            continue
+
+        # ✅ فصل العدادات
+        consecutive_failure_count = 0  # للتعامل مع "Count unchanged"
+        actual_peer_flood_count = 0   # فقط لـ PeerFloodError
+        privacy_restricted_count = 0  # لمراقبة أخطاء الخصوصية
+        success_counter = 1  # ✅ عداد الأرقام
+        successful_adds = 0
+        member_index = start_index
+
+        while member_index < len(members):
+            if max_add_per_account and successful_adds >= max_add_per_account:
+                break
+
+            member = members[member_index]
+            username = member.get('username')
+            member_index += 1
+
+            if not username:
+                console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Skipping: missing username. ❌[/bold yellow]")
+                continue
+
+            try:
+                user = await client.get_entity(username)
+                # تنفيذ الإضافة
+                await client(InviteToChannelRequest(target_entity, [user]))
+                
+                # ✅ الانتظار قليلاً لتمكين التحديث
+                await asyncio.sleep(3)
+                
+                # ✅ جلب العدد بعد الإضافة
+                try:
+                    updated_full = await client(GetFullChannelRequest(target_entity))
+                    new_count = updated_full.full_chat.participants_count
+                except:
+                    new_count = initial_member_count
+
+                # ✅ التحقق من النجاح: هل زاد العدد؟
+                if initial_member_count is not None and new_count > initial_member_count:
+                    console.print(f"[bold green] {success_counter}: [Account #{i_account}] --> Add <--> Done --> {username} ✅ [{new_count} Members][/bold green]")
+                    success_counter += 1
+                    successful_adds += 1
+                    total_added += 1
+                    initial_member_count = new_count  # تحديث العدد
+                    # ✅ إعادة تعيين جميع العدادات عند النجاح
+                    consecutive_failure_count = 0
+                    actual_peer_flood_count = 0
+                    privacy_restricted_count = 0
+                    with open(PROGRESS_FILE, "w") as pf:
+                        pf.write(str(member_index))  # ✅ التحديث فقط عند النجاح المادي
+                    await asyncio.sleep(delay_sec)
+                else:
+                    # ❌ فشل بسبب "عدم تغير العدد"
+                    console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Count unchanged. ❌[/bold yellow]")
+                    consecutive_failure_count += 1
+                    if consecutive_failure_count >= 25:
+                        console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Too many consecutive failures. Moving to next account. ❌[/bold yellow]")
+                        break
+                    await asyncio.sleep(peer_flood_delay)
+
+            except errors.UserPrivacyRestrictedError:
+                console.print(f"[bold red] [Account #{i_account}] --> Add <--> Failed --> Privacy prevents adding: {username} ❌[/bold red]")
+                privacy_restricted_count += 1
+                if privacy_restricted_count >= 10:
+                    console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Too many privacy errors. Moving to next account. ❌[/bold yellow]")
+                    break
+                await asyncio.sleep(peer_flood_delay)
+
+            except errors.FloodWaitError as e:
+                console.print(f"[bold red] [Account #{i_account}] --> Add <--> Failed --> FloodWait {e.seconds}s. Skipping account. ❌[/bold red]")
+                break
+
+            except errors.PeerFloodError:
+                actual_peer_flood_count += 1
+                console.print(f"[bold red] [Account #{i_account}] --> Add <--> Failed --> PeerFlood ({actual_peer_flood_count}). ❌[/bold red]")
+                if actual_peer_flood_count >= 15:
+                    console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Too many PeerFlood errors. Moving to next account. ❌[/bold yellow]")
+                    break
+                await asyncio.sleep(peer_flood_delay)
+
+            except errors.UserNotMutualContactError:
+                console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Cannot add non-mutual contact: {username} ❌[/bold yellow]")
+                # هذه المشكلة فردية، لا تؤثر على الحساب
+                await asyncio.sleep(peer_flood_delay)
+
+            except errors.UserChannelsTooMuchError:
+                console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> User is already in too many channels: {username} ❌[/bold yellow]")
+                # هذه المشكلة فردية
+                await asyncio.sleep(peer_flood_delay)
+
+            except errors.UserBannedInChannelError:
+                console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> User is banned in the channel: {username} ❌[/bold yellow]")
+                # هذه المشكلة فردية
+                await asyncio.sleep(peer_flood_delay)
+
+            except errors.ChatAdminRequiredError:
+                console.print(f"[bold red] [Account #{i_account}] --> Add <--> Failed --> Admin rights required to add users. ❌[/bold red]")
+                break
+
+            except Exception as e:
+                console.print(f"[bold red] [Account #{i_account}] --> Add <--> Failed --> Unknown error: {e} ❌[/bold red]")
+                consecutive_failure_count += 1
+                if consecutive_failure_count >= 25:
+                    console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Too many consecutive failures. Moving to next account. ❌[/bold yellow]")
+                    break
+                await asyncio.sleep(peer_flood_delay)
+
+        console.print(f"[magenta bold]Account #{i_account} added {successful_adds} members ✅[/magenta bold]")
+        added_counts.append(successful_adds)
+        await client.disconnect()
+
+    summary = '&'.join(map(str, added_counts))
+    console.print(f"\n[bold]Summary per account: {summary}[/bold]")
+    console.print(f"[bold]Total members added successfully: {total_added}[/bold]")
+
+# --- دالة الإضافة بالمعرف (الخيار 13) ---
+@subscription_required_decorator
+async def add_members_multi_accounts_by_id(accounts, target_group, delay_sec=5, max_add_per_account=None, peer_flood_delay=5):
+    if not target_group:
+        if os.path.exists(GROUP_FILE):
+            with open(GROUP_FILE, "r", encoding="utf-8") as f:
+                saved_group = f.read().strip()
+            use_saved = Prompt.ask(f"[?] Do you want to continue with the previous group [white]{saved_group}[/white]? (y/n)", choices=["y","n"])
+            if use_saved == 'y':
+                target_group = saved_group
+            else:
+                target_group = Prompt.ask("Enter new group name (username or link)")
+        else:
+            target_group = Prompt.ask("Enter group name (username or link)")
+    with open(GROUP_FILE, "w", encoding="utf-8") as f:
+        f.write(target_group)
+    members_file = CSV_FILE
+    if not os.path.isfile(members_file):
+        console.print(f"[red bold]File {members_file} does not exist. Please scrape members first.[/red bold]")
+        return
+    with open(members_file, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        members = list(reader)
+    if not members:
+        console.print(f"[red bold]No members found in {members_file}. Please ensure the file contains members with 'id' and 'access_hash' columns.[/red bold]")
+        return
+    start_index = 0
+    if os.path.exists(PROGRESS_FILE):
+        try:
+            with open(PROGRESS_FILE, "r") as pf:
+                start_index = int(pf.read().strip())
+        except:
+            start_index = 0
+    total_added = 0
+    added_counts = []
+
+    for i_account, account in enumerate(accounts, start=1):
+        console.print(f"\n[cyan bold]Using account #{i_account}: {account['phone']}[/cyan bold]")
+        try:
+            client = await login_account_async(account)
+            target_entity = await client.get_entity(target_group)
+            
+            # ✅ جلب عدد أعضاء المجموعة قبل الإضافة
+            try:
+                full_channel = await client(GetFullChannelRequest(target_entity))
+                initial_member_count = full_channel.full_chat.participants_count
+                console.print(f"[bold blue]Initial member count in the group: {initial_member_count}[/bold blue]")
+            except Exception as e:
+                console.print(f"[yellow]Could not fetch initial member count: {e}[/yellow]")
+                initial_member_count = None
+
+            console.print(f"[yellow]Attempting to join the channel...[/yellow]")
+            join_success = await join_channel(client, target_entity)
+            if not join_success:
+                console.print(f"[red]Skipping account as it failed to join the channel[/red]")
+                await client.disconnect()
+                continue
+        except Exception as e:
+            console.print(f"[red bold]Login/Get entity failed: {e}[/red bold]")
+            continue
+
+        # ✅ فصل العدادات
+        consecutive_failure_count = 0  # للتعامل مع "Count unchanged"
+        actual_peer_flood_count = 0   # فقط لـ PeerFloodError
+        privacy_restricted_count = 0  # لمراقبة أخطاء الخصوصية
+        success_counter = 1  # ✅ عداد الأرقام
+        successful_adds = 0
+        member_index = start_index
+
+        while member_index < len(members):
+            if max_add_per_account and successful_adds >= max_add_per_account:
+                break
+
+            member = members[member_index]
+            member_id = member.get('id')
+            access_hash = member.get('access_hash')
+            member_index += 1
+
+            if not member_id or not access_hash:
+                console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Skipping: missing ID or access_hash. ❌[/bold yellow]")
+                continue
+
+            try:
+                user = types.InputUser(int(member_id), int(access_hash))
+                # تنفيذ الإضافة
+                await client(InviteToChannelRequest(target_entity, [user]))
+                
+                # ✅ الانتظار قليلاً لتمكين التحديث
+                await asyncio.sleep(3)
+                
+                # ✅ جلب العدد بعد الإضافة
+                try:
+                    updated_full = await client(GetFullChannelRequest(target_entity))
+                    new_count = updated_full.full_chat.participants_count
+                except:
+                    new_count = initial_member_count
+
+                # ✅ التحقق من النجاح: هل زاد العدد؟
+                if initial_member_count is not None and new_count > initial_member_count:
+                    console.print(f"[bold green] {success_counter}: [Account #{i_account}] --> Add <--> Done --> {member_id} ✅ [{new_count} Members][/bold green]")
+                    success_counter += 1
+                    successful_adds += 1
+                    total_added += 1
+                    initial_member_count = new_count  # تحديث العدد
+                    # ✅ إعادة تعيين جميع العدادات عند النجاح
+                    consecutive_failure_count = 0
+                    actual_peer_flood_count = 0
+                    privacy_restricted_count = 0
+                    with open(PROGRESS_FILE, "w") as pf:
+                        pf.write(str(member_index))  # ✅ التحديث فقط عند النجاح المادي
+                    await asyncio.sleep(delay_sec)
+                else:
+                    # ❌ فشل بسبب "عدم تغير العدد"
+                    console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Count unchanged. ❌[/bold yellow]")
+                    consecutive_failure_count += 1
+                    if consecutive_failure_count >= 25:
+                        console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Too many consecutive failures. Moving to next account. ❌[/bold yellow]")
+                        break
+                    await asyncio.sleep(peer_flood_delay)
+
+            except errors.UserPrivacyRestrictedError:
+                console.print(f"[bold red] [Account #{i_account}] --> Add <--> Failed --> Privacy prevents adding: {member_id} ❌[/bold red]")
+                privacy_restricted_count += 1
+                if privacy_restricted_count >= 10:
+                    console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Too many privacy errors. Moving to next account. ❌[/bold yellow]")
+                    break
+                await asyncio.sleep(peer_flood_delay)
+
+            except errors.FloodWaitError as e:
+                console.print(f"[bold red] [Account #{i_account}] --> Add <--> Failed --> FloodWait {e.seconds}s. Skipping account. ❌[/bold red]")
+                break
+
+            except errors.PeerFloodError:
+                actual_peer_flood_count += 1
+                console.print(f"[bold red] [Account #{i_account}] --> Add <--> Failed --> PeerFlood ({actual_peer_flood_count}). ❌[/bold red]")
+                if actual_peer_flood_count >= 15:
+                    console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Too many PeerFlood errors. Moving to next account. ❌[/bold yellow]")
+                    break
+                await asyncio.sleep(peer_flood_delay)
+
+            except errors.UserNotMutualContactError:
+                console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Cannot add non-mutual contact: {member_id} ❌[/bold yellow]")
+                # هذه المشكلة فردية، لا تؤثر على الحساب
+                await asyncio.sleep(peer_flood_delay)
+
+            except errors.UserChannelsTooMuchError:
+                console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> User is already in too many channels: {member_id} ❌[/bold yellow]")
+                # هذه المشكلة فردية
+                await asyncio.sleep(peer_flood_delay)
+
+            except errors.UserBannedInChannelError:
+                console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> User is banned in the channel: {member_id} ❌[/bold yellow]")
+                # هذه المشكلة فردية
+                await asyncio.sleep(peer_flood_delay)
+
+            except errors.ChatAdminRequiredError:
+                console.print(f"[bold red] [Account #{i_account}] --> Add <--> Failed --> Admin rights required to add users. ❌[/bold red]")
+                break
+
+            except Exception as e:
+                console.print(f"[bold red] [Account #{i_account}] --> Add <--> Failed --> Unknown error: {e} ❌[/bold red]")
+                consecutive_failure_count += 1
+                if consecutive_failure_count >= 25:
+                    console.print(f"[bold yellow] [Account #{i_account}] --> Add <--> Failed --> Too many consecutive failures. Moving to next account. ❌[/bold yellow]")
+                    break
+                await asyncio.sleep(peer_flood_delay)
+
+        console.print(f"[magenta bold]Account #{i_account} added {successful_adds} members ✅[/magenta bold]")
+        added_counts.append(successful_adds)
+        await client.disconnect()
+
+    summary = '&'.join(map(str, added_counts))
+    console.print(f"\n[bold]Summary per account: {summary}[/bold]")
+    console.print(f"[bold]Total members added successfully: {total_added}[/bold]")
+
+# Contact adding functions
+def load_usernames():
+    usernames = []
+    if not os.path.isfile(MEMBERS_FILE):
+        console.print(f"[red]File {MEMBERS_FILE} not found![/red]")
+        return usernames
+    with open(MEMBERS_FILE, 'r', encoding='utf-8') as f:
+        for line in f:
+            username = line.strip().lstrip('@')
+            if username:
+                usernames.append(username)
+    return usernames
+
+def load_progress():
+    if not os.path.isfile(PROGRESS_FILE):
+        return 0
+    try:
+        with open(PROGRESS_FILE, 'r') as f:
+            return int(f.read().strip())
+    except:
+        return 0
+
+def save_progress(pos):
+    with open(PROGRESS_FILE, 'w') as f:
+        f.write(str(pos))
+
+def get_sessions():
+    sessions = []
+    if not os.path.isdir(SESSIONS_DIR):
+        os.makedirs(SESSIONS_DIR)
+        console.print(f"[yellow]Created sessions folder: {SESSIONS_DIR}[/yellow]")
+    for file in os.listdir(SESSIONS_DIR):
+        if file.endswith(".session"):
+            sessions.append(file.replace(".session", ""))
+    return sessions
+
+async def add_contacts_by_username(client, usernames):
+    added = []
+    for username in usernames:
+        try:
+            user = await client.get_entity(username)
+            input_user = types.InputUser(user.id, user.access_hash)
+            await client(functions.contacts.AddContactRequest(
+                id=input_user,
+                first_name=user.first_name or "",
+                last_name=user.last_name or "",
+                phone="",
+                add_phone_privacy_exception=False
+            ))
+            console.print(f"[green]Added: {username}[/green]")
+            added.append(username)
+        except UserPrivacyRestrictedError:
+            console.print(f"[yellow]Could not add {username} due to privacy settings[/yellow]")
+        except FloodWaitError as e:
+            console.print(f"[yellow]FloodWait: sleeping {e.seconds} seconds[/yellow]")
+            return "flood", e.seconds
+        except Exception as e:
+            console.print(f"[red]Error adding {username}: {e}[/red]")
+    return "ok", added
+
+@subscription_required_decorator
+async def add_contacts_flow():
+    usernames = load_usernames()
+    if not usernames:
+        return
+    progress = load_progress()
+    console.print(Panel(f"[cyan]Total usernames in CSV: {len(usernames)}\nAlready added: {progress}[/cyan]", title="Info"))
+    max_per_session = Prompt.ask("How many users to add per session? (0 = all)", default="0")
+    try:
+        max_per_session = int(max_per_session)
+    except:
+        max_per_session = 0
+    if max_per_session == 0:
+        max_per_session = len(usernames) - progress
+    sessions = get_sessions()
+    if not sessions:
+        console.print("[red]No .session files found in 'sessions/' folder[/red]")
+        return
+    for idx, session_name in enumerate(sessions, 1):
+        session_path = os.path.join(SESSIONS_DIR, session_name)
+        console.print(f"\n[bold yellow]Using session #{idx}: {session_name}[/bold yellow]")
+        try:
+            client = TelegramClient(session_path, api_id=API_ID, api_hash=API_HASH)
+            await client.start()
+        except Exception as e:
+            console.print(f"[red]Failed to load session '{session_name}': {e}[/red]")
+            continue
+        start = progress
+        end = min(start + max_per_session, len(usernames))
+        if start >= len(usernames):
+            console.print("[green]All usernames have been added.[/green]")
+            await client.disconnect()
+            break
+        batch = usernames[start:end]
+        result, data = await add_contacts_by_username(client, batch)
+        if result == "flood":
+            await client.disconnect()
+            continue
+        progress = end
+        save_progress(progress)
+        await client.disconnect()
+        if progress >= len(usernames):
+            console.print("[green]Successfully added all users![/green]")
+            await client.disconnect()
+            break
+    await client.disconnect()
+
+@subscription_required_decorator
+async def delete_contacts():
+    sessions = get_sessions()
+    if not sessions:
+        console.print("[red]No sessions found.[/red]")
+        return
+    for idx, session in enumerate(sessions, 1):
+        console.print(f"\n[bold yellow]Using session #{idx}: {session}[/bold yellow]")
+        try:
+            client = TelegramClient(os.path.join(SESSIONS_DIR, session), api_id=API_ID, api_hash=API_HASH)
+            await client.start()
+            result = await client(functions.contacts.GetContactsRequest(hash=0))
+            users = result.users
+            if not users:
+                console.print("[yellow]No contacts found.[/yellow]")
+            else:
+                ids = [types.InputUser(user.id, user.access_hash) for user in users]
+                await client(functions.contacts.DeleteContactsRequest(id=ids))
+                console.print(f"[green]Deleted {len(ids)} contacts[/green]")
+            await client.disconnect()
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+
+# Username management functions
+@subscription_required_decorator
+async def collect_usernames(accounts):
+    usernames = []
+    for i, acc in enumerate(accounts, start=1):
+        try:
+            client = await login_account_async(acc)
+            me = await client.get_me()
+            username = me.username
+            if username:
+                print(Fore.CYAN + f"{i}. {acc['phone']} --> @{username}")
+                usernames.append(f"@{username}")
+            else:
+                print(Fore.YELLOW + f"{i}. {acc['phone']} --> No username set")
+            await client.disconnect()
+        except Exception as e:
+            print(Fore.RED + f"Failed to fetch user info for {acc['phone']}: {e}")
+    with open(USERNAMES_CSV, "w", encoding="utf-8") as f:
+        for u in usernames:
+            f.write(u + "\n")
+    print(Fore.GREEN + f"Usernames saved to {USERNAMES_CSV}")
+
+@subscription_required_decorator
+async def set_usernames(accounts):
+    prefix = "user_"
+    for acc in accounts:
+        try:
+            client = await login_account_async(acc)
+            me = await client.get_me()
+            if me.username:
+                print(Fore.YELLOW + f"{acc['phone']} already has username: @{me.username}")
+            else:
+                new_username = prefix + acc['phone'][-6:]
+                print(Fore.CYAN + f"Setting username for {acc['phone']} to @{new_username}")
+                try:
+                    await client(functions.account.UpdateUsernameRequest(new_username))
+                    print(Fore.GREEN + f"Username set to @{new_username}")
+                except Exception as e:
+                    print(Fore.RED + f"Failed to set username @{new_username}: {e}")
+            await client.disconnect()
+        except Exception as e:
+            print(Fore.RED + f"Failed for {acc['phone']}: {e}")
+
+@subscription_required_decorator
+async def delete_usernames(accounts):
+    for acc in accounts:
+        try:
+            client = await login_account_async(acc)
+            me = await client.get_me()
+            if me.username:
+                print(Fore.CYAN + f"Deleting username @{me.username} for {acc['phone']}")
+                try:
+                    await client(functions.account.UpdateUsernameRequest(''))
+                    print(Fore.GREEN + f"Username deleted for {acc['phone']}")
+                except Exception as e:
+                    print(Fore.RED + f"Failed to delete username for {acc['phone']}: {e}")
+            else:
+                print(Fore.YELLOW + f"{acc['phone']} has no username set.")
+            await client.disconnect()
+        except Exception as e:
+            print(Fore.RED + f"Failed for {acc['phone']}: {e}")
+
+@subscription_required_decorator
+async def login_accounts_from_file_sequentially():
+    console.print("[cyan bold]Logging in accounts from phone.csv sequentially[/cyan bold]")
+    accounts = load_accounts()
+    if not accounts:
+        console.print("[red bold]No accounts found in phone.csv. Please add accounts first.[/bold red]")
+        return
+    for account in accounts:
+        await login_account_async_with_prompt(account)
+
+# --- دالة التحديث المُعدّلة ---
+async def update_tools():
+    console.print("[bold green]🔄 Starting update process...[/bold green]")
+    
+    # ✅ 1. التحقق من التفعيل والاشتراك
+    if not activation_system.check_activation():
+        console.print("[red]❌  Activation failed. Cannot update.[/red]")
+        Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+        return
+    
+    if not activation_system.subscribed:
+        console.print("[red]❌  Subscription required to update.[/red]")
+        Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+        return
+
+    ensure_files_and_directories()
+    activation_system.check_for_updates()
+
+    if not activation_system.new_update_available:
+        console.print("[green]✅  You are already running the latest version.[/green]")
+        Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+        return
+
+    console.print(Panel(
+        f"[bold yellow]New Update Available: Version {activation_system.latest_version}[/bold yellow]\n"
+        "Downloading and applying update... This may take a moment.",
+        title="Software Update",
+        style="yellow on black",
+        padding=(1, 4)
+    ))
+
+    try:
+        # ✅ 2. تنزيل المكتبات المطلوبة مع شريط تقدم
+        console.print("[bold blue]📦 Installing required packages...[/bold blue]")
+        requirements_content = """requests
+telethon
+rich
+colorama
+PySocks"""
+        with open("requirements.txt", "w") as f:
+            f.write(requirements_content)
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+            console=console
+        ) as progress:
+            task = progress.add_task("[cyan]Installing packages...", total=100)
+            for i in range(100):
+                await asyncio.sleep(0.02)
+                progress.update(task, advance=1)
+            result = subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], 
+                                  capture_output=True, text=True)
+            if result.returncode != 0:
+                console.print(f"[red]❌  Failed to install packages: {result.stderr}[/red]")
+                return
+        console.print("[bold green]✅  All packages installed successfully![/bold green]")
+
+        # ✅ 3. حذف الملفات القديمة
+        files_to_remove = ["main3.py"]
+        for file in files_to_remove:
+            if os.path.exists(file):
+                os.remove(file)
+                console.print(f"[bold yellow]🗑️  Removed old {file}[/bold yellow]")
+
+        # ✅ 4. تنزيل الأدوات الجديدة مع شريط تقدم
+        console.print("[bold blue]⬇️  Downloading the new tools...[/bold blue]")
+        download_url = f"{NEW_MAIN3_PY_DOWNLOAD_URL}?v={random.randint(1000, 9999)}"
+        response = requests.get(download_url, stream=True, timeout=30)
+        response.raise_for_status()
+        total_size = int(response.headers.get('content-length', 0))
+
+        with Progress(
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(bar_width=None),
+            "[progress.percentage]{task.percentage:>3.1f}%",
+            "•",
+            DownloadColumn(),
+            console=console
+        ) as progress:
+            download_task = progress.add_task("[cyan]Downloading main3.py...", total=total_size)
+            with open("main3.py", "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    progress.update(download_task, advance=len(chunk))
+        
+        console.print("[bold green]✅  New main3.py downloaded successfully![/bold green]")
+
+        # ✅ 5. تنزيل ملفات إضافية (Excel, HTML, Java...) مع شريط تقدم
+        console.print("[bold blue]📎 Downloading additional required files...[/bold blue]")
+        additional_files = {
+            "web/contact.html": "https://raw.githubusercontent.com/Khaled1996k/telegram-tools-updates/main/web/contact.html",
+            "java/TelegramBot.java": "https://raw.githubusercontent.com/Khaled1996k/telegram-tools-updates/main/java/TelegramBot.java"
+        }
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=console
+        ) as progress:
+            for filename, url in additional_files.items():
+                task = progress.add_task(f"[cyan]Downloading {filename}...", total=1)
+                try:
+                    os.makedirs(os.path.dirname(filename), exist_ok=True)
+                    file_response = requests.get(url, timeout=10)
+                    file_response.raise_for_status()
+                    with open(filename, "w", encoding="utf-8") as f:
+                        f.write(file_response.text)
+                    progress.update(task, advance=1)
+                except Exception as e:
+                    console.print(f"[red]❌  Failed to download {filename}: {e}[/red]")
+                    progress.update(task, advance=1)
+
+        console.print("[bold green]✅  Additional files downloaded successfully![/bold green]")
+
+        # ✅ 6. حفظ حالة التحديث
+        activation_system.update_reminder_shown = False
+        activation_system.save_local_activation()
+        
+        # ✅ 7. إعادة التشغيل التلقائي
+        console.print("[bold green]🔄 Update complete! Restarting the application...[/bold green]")
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
+        
+    except requests.exceptions.RequestException as e:
+        console.print(f"[red]❌ Failed to download update: {e}[/red]")
+    except Exception as e:
+        console.print(f"[red]❌ An unexpected error occurred: {e}[/red]")
+
+# ✅ دالة جديدة: حذف حساب من phone.csv (بدون تأكيد)
+@subscription_required_decorator
+async def remove_account_from_phone_csv():
+    """Allow user to remove an account from phone.csv by selecting its number."""
+    phone_file = "phone.csv"
+    if not os.path.exists(phone_file):
+        console.print(f"[red bold]File {phone_file} does not exist.[/red bold]")
+        return
+
+    with open(phone_file, "r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f if line.strip()]
+
+    if not lines:
+        console.print(f"[red bold]No accounts found in {phone_file}.[/red bold]")
+        return
+
+    # Skip header if present
+    if lines[0].lower().startswith("phone"):
+        accounts = lines[1:]
+    else:
+        accounts = lines
+
+    if not accounts:
+        console.print(f"[red bold]No phone numbers found in {phone_file}.[/red bold]")
+        return
+
+    console.print("[bold cyan]Available accounts:[/bold cyan]")
+    for idx, phone in enumerate(accounts, start=1):
+        console.print(f"[bold]{idx}.[/bold] {phone}")
+
+    try:
+        selection = Prompt.ask("[yellow]Enter the number of the account to remove (or '0' to cancel)[/yellow]")
+        if selection == '0':
+            console.print("[green]Operation cancelled.[/green]")
+            return
+        choice = int(selection)
+        if choice < 1 or choice > len(accounts):
+            console.print(f"[red]Invalid selection. Please choose a number between 1 and {len(accounts)}.[/red]")
+            return
+
+        phone_to_remove = accounts[choice - 1]
+        # ✅ تم حذف السؤال التأكيدي
+        # Rebuild the file without the selected phone
+        with open(phone_file, "w", encoding="utf-8", newline="") as f:
+            if lines[0].lower().startswith("phone"):
+                f.write("phone\n")
+            for phone in accounts:
+                if phone != phone_to_remove:
+                    f.write(f"{phone}\n")
+        console.print(f"[bold green]✅ Account {phone_to_remove} has been removed from {phone_file}.[/bold green]")
+
+    except ValueError:
+        console.print("[red]Please enter a valid number.[/red]")
+    except Exception as e:
+        console.print(f"[red]An error occurred: {e}[/red]")
+
+# --- القائمة الرئيسية ---
+async def main_menu():
+    activation_system.load_or_generate_id()
+    activation_system.check_activation()
+    activation_system.check_subscription()
+    activation_system.check_for_updates()
+    ensure_files_and_directories()
+
+    # ✅ التحقق من تذكير التحديث
+    if (activation_system.new_update_available and 
+        activation_system.last_update_check_time and 
+        not activation_system.update_reminder_shown and
+        (datetime.now() - activation_system.last_update_check_time).total_seconds() > UPDATE_GRACE_PERIOD):
+        console.print(Panel(
+            f"[bold yellow]A new update (Version {activation_system.latest_version}) is available![/bold yellow]\n"
+            "To ensure optimal performance and security, please update your tools by selecting option 20.\n"
+            f"Your Activation ID: [cyan]{activation_system.current_id}[/cyan]",
+            title="Update Reminder",
+            style="yellow on black",
+            padding=(1, 4)
+        ))
+        activation_system.update_reminder_shown = True
+        activation_system.save_local_activation()
+        Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+
+    empty_input_count = 0  # ✅ عداد لإغلاق الأداة بعد 3 محاولات فارغة
+    while True:
+        clear_screen()
+        
+        # ✅ تم تعديل شريط العنوان ليشمل Activation ID
+        header_info = Text()
+        header_info.append("=====================================================================\n", style="bold blue")
+        header_info.append("    Telegram Tools & Automation - Professional Edition\n", style="bold white")
+        header_info.append("    Developed by Khaled Halabi (@khaled1261)\n", style="bold magenta")
+        header_info.append(f"    Current Version: {CURRENT_VERSION}", style="bold cyan")
+        
+        # ✅ إضافة حالة الاشتراك
+        if activation_system.subscribed:
+            header_info.append(" | Status: SUBSCRIBED ✅ ", style="bold green")
+        else:
+            header_info.append(" | Status: NOT SUBSCRIBED ❌ ", style="bold red")
+            
+        # ✅ إضافة Activation ID باللون البرتقالي العريض
+        header_info.append(f"\n    Your Activation ID: ", style="bold orange1")
+        header_info.append(f"{activation_system.current_id}")
+        header_info.append("\n=====================================================================", style="bold blue")
+        console.print(header_info)
+
+        # ✅ إضافة حالة التحديث
+        update_status = "[bold green]You are running the latest version.[/bold green]"
+        if activation_system.new_update_available:
+            update_status = f"[bold yellow]New Update Available! Version {activation_system.latest_version}. Please update via option 20.[/bold yellow]"
+        
+        developer_panel = Panel(
+            f"[bold cyan]Contact Developer:[/bold cyan] [magenta]@khaled1261[/magenta]\n"
+            f"{update_status}",
+            title="[bold green]Developer & Update Info[/bold green]",
+            border_style="green",
+            padding=(1, 2)
+        )
+        console.print(developer_panel)
+
+        menu_text = Text()
+        menu_text.append("=== Main Menu - Professional Edition V3.0 ===", style="bold white on deep_sky_blue4")
+        console.print(menu_text)
+        
+        # Account Management
+        account_management_content = Text()
+        account_management_content.append("[01] Add New Accounts\n", style="light_sky_blue1")
+        account_management_content.append("[02] Login Accounts from File (Sequential)\n", style="light_sky_blue1")
+        account_management_content.append("[03] Check Account Status\n", style="light_sky_blue1")
+        account_management_content.append("[04] Check for Banned Accounts and Remove\n", style="light_sky_blue1")
+        account_management_content.append("[05] Remove Account from phone.csv", style="light_sky_blue1")
+        console.print(Panel(account_management_content, title="[bold cyan]--- Account Management ---[/bold cyan]", title_align="left", border_style="blue", padding=(0, 1), expand=False))
+        
+        # Scraper Tools
+        scraper_tools_content = Text()
+        scraper_tools_content.append("[06] Scrape Active Members by Username\n", style="light_sky_blue1")
+        scraper_tools_content.append("[07] Scrape Active Members by ID\n", style="light_sky_blue1")
+        scraper_tools_content.append("[08] Scrape Members by Username (Normal Groups)\n", style="light_sky_blue1")
+        scraper_tools_content.append("[09] Scrape Members by ID (Normal Groups)\n", style="light_sky_blue1")
+        scraper_tools_content.append("[10] Scrape from Messages by Username (Hidden Groups)\n", style="light_sky_blue1")
+        scraper_tools_content.append("[11] Scrape from Messages by ID (Hidden Groups)\n", style="light_sky_blue1")
+        scraper_tools_content.append("[12] Check Linked Group & Scrape Invite Links from Channel", style="light_sky_blue1")
+        console.print(Panel(scraper_tools_content, title="[bold cyan]--- Scraper Tools ---[/bold cyan]", title_align="left", border_style="blue", padding=(0, 1), expand=False))
+
+        # Member Adder
+        member_adder_content = Text()
+        member_adder_content.append("[13] Add Members to Group/Channel (by Username)\n", style="light_sky_blue1")
+        member_adder_content.append("[14] Add Members to Group/Channel (by ID)", style="light_sky_blue1")
+        console.print(Panel(member_adder_content, title="[bold cyan]--- Member Adder ---[/bold cyan]", title_align="left", border_style="blue", padding=(0, 1), expand=False))
+
+        # Contact Manager
+        contact_manager_content = Text()
+        contact_manager_content.append("[15] Add Contacts from CSV File (Usernames only)\n", style="light_sky_blue1")
+        contact_manager_content.append("[16] Delete All Contacts from a Session", style="light_sky_blue1")
+        console.print(Panel(contact_manager_content, title="[bold cyan]--- Contact Manager ---[/bold cyan]", title_align="left", border_style="blue", padding=(0, 1), expand=False))
+
+        # Username Manager
+        username_manager_content = Text()
+        username_manager_content.append("[17] Collect Usernames of All Accounts\n", style="light_sky_blue1")
+        username_manager_content.append("[18] Set Username for Accounts without Username\n", style="light_sky_blue1")
+        username_manager_content.append("[19] Delete Username from Accounts", style="light_sky_blue1")
+        console.print(Panel(username_manager_content, title="[bold cyan]--- Username Manager ---[/bold cyan]", title_align="left", border_style="blue", padding=(0, 1), expand=False))
+
+        # ✅ عرض رسالة التحديث أسفل الخيار 20 إذا كان هناك تحديث
+        console.print(Text("[20] Update Tools" + (" (New Version Available!)" if activation_system.new_update_available else ""), style="bold green"))
+        if activation_system.new_update_available:
+            console.print(Panel(
+                f"[bold green]A new update is available! Please select option 20 to update.\n"
+                f"Version {activation_system.latest_version} is ready.\n"
+                "Make sure you are subscribed first.",
+                title="Software Update Available",
+                style="bold green on black",
+                padding=(1, 4)
+            ))
+        console.print(Text("[21] Contact Developer via Telegram", style="bold cyan"))
+        console.print(Text("[22] Exit Application", style="bold red"))
+
+        valid_choices = [str(i) for i in range(1, 23)]
+        choice = Prompt.ask("[yellow]Enter your choice[/yellow]", choices=valid_choices)
+
+        if choice == "":
+            empty_input_count += 1
+            if empty_input_count >= 3:
+                console.print("[red]Exiting due to repeated empty inputs.[/red]")
+                sys.exit()
+            continue
+
+        unrestricted_choices = ["21", "22"]
+        if choice not in unrestricted_choices and not activation_system.subscribed:
+            console.print(Panel(
+                "[bold red]Subscription Required![/bold red]\n"
+                "This feature requires an active subscription.\n"
+                f"Your Activation ID: [cyan]{activation_system.current_id}[/cyan]\n"
+                "Please send this ID to the developer (@khaled1261) to subscribe and unlock all features.",
+                title="Subscription Required", 
+                style="red", 
+                padding=(1, 4)
+            ))
+            Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+            continue
+
+        # Handling choice 1
+        if choice == "1":
+            await add_new_accounts()
+        elif choice == "2":
+            await login_accounts_from_file_sequentially()
+        elif choice == "3":
+            await run_account_check()
+        elif choice == "4":
+            await run_account_check()
+        elif choice == "5":
+            await remove_account_from_phone_csv()
+        elif choice in ["6", "7", "8", "9", "10", "11", "12"]:
+            accounts = load_accounts()
+            if not accounts:
+                console.print("[bold red]❌  No accounts loaded. Please add accounts to phone.csv[/bold red]")
+                Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+                continue
+            clients = await login_accounts_multi(accounts, 1)
+            if not clients:
+                console.print("[bold red]❌  Login failed for all accounts.[/bold red]")
+                Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+                continue
+            client = clients[0]
+            if choice == "6":
+                group = Prompt.ask("Enter target group/channel ID or username")
+                max_members_str = Prompt.ask("How many members do you want to scrape? (Leave empty for no limit)", default="")
+                max_members = int(max_members_str) if max_members_str.strip() else None
+                await scrape_active_members(client, group, max_members=max_members)
+            elif choice == "7":
+                group = Prompt.ask("Enter target group/channel ID or username")
+                max_members_str = Prompt.ask("How many members do you want to scrape? (Leave empty for no limit)", default="")
+                max_members = int(max_members_str) if max_members_str.strip() else None
+                await scrape_active_members_by_id(client, group, max_members=max_members)
+            elif choice == "8":
+                group = Prompt.ask("Enter target group/channel ID or username")
+                max_members_str = Prompt.ask("How many members do you want to scrape? (Leave empty for no limit)", default="")
+                max_members = int(max_members_str) if max_members_str.strip() else None
+                await scrape_members_from_group_by_username(client, group, max_members=max_members)
+            elif choice == "9":
+                group = Prompt.ask("Enter target group/channel ID or username")
+                max_members_str = Prompt.ask("How many members do you want to scrape? (Leave empty for no limit)", default="")
+                max_members = int(max_members_str) if max_members_str.strip() else None
+                await scrape_members_from_group(client, group, max_members=max_members, scrape_by="id")
+            elif choice == "10":
+                group = Prompt.ask("Enter target group/channel ID or username")
+                max_members_str = Prompt.ask("How many members do you want to scrape? (Leave empty for no limit)", default="")
+                max_members = int(max_members_str) if max_members_str.strip() else None
+                await scrape_members_from_messages_by_username(client, group, limit=max_members)
+            elif choice == "11":
+                group = Prompt.ask("Enter target group/channel ID or username")
+                max_members_str = Prompt.ask("How many members do you want to scrape? (Leave empty for no limit)", default="")
+                max_members = int(max_members_str) if max_members_str.strip() else None
+                await scrape_members_from_messages(client, group, limit=max_members, scrape_by="id")
+            elif choice == "12":
+                channel = Prompt.ask("Enter channel username or link")
+                linked_group = await get_linked_group(client, channel)
+                await scrape_invite_links(client, channel)
+            await client.disconnect()
+        elif choice == "13":
+            max_add = Prompt.ask("[cyan]Enter max number of members to add per account (0 = no limit)[cyan]", default="0")
+            delay = Prompt.ask("[cyan]Enter delay in seconds between each add (e.g., 5)[cyan]", default="5")
+            peer_flood_delay = Prompt.ask("[cyan]Enter PeerFlood delay in seconds (e.g., 30) - how long to wait after PeerFlood error[cyan]", default="30")
+            max_add_per_account = int(max_add) if max_add.strip() else None
+            delay_sec = float(delay) if delay.strip() else 5
+            peer_flood_delay_sec = float(peer_flood_delay) if peer_flood_delay.strip() else 30
+            await add_members_multi_accounts(load_accounts(), None, delay_sec=delay_sec, max_add_per_account=max_add_per_account, peer_flood_delay=peer_flood_delay_sec)
+        elif choice == "14":
+            max_add = Prompt.ask("[cyan]Enter max number of members to add per account (0 = no limit)[cyan]", default="0")
+            delay = Prompt.ask("[cyan]Enter delay in seconds between each add (e.g., 5)[cyan]", default="5")
+            peer_flood_delay = Prompt.ask("[cyan]Enter PeerFlood delay in seconds (e.g., 30) - how long to wait after PeerFlood error[cyan]", default="30")
+            max_add_per_account = int(max_add) if max_add.strip() else None
+            delay_sec = float(delay) if delay.strip() else 5
+            peer_flood_delay_sec = float(peer_flood_delay) if peer_flood_delay.strip() else 30
+            await add_members_multi_accounts_by_id(load_accounts(), None, delay_sec=delay_sec, max_add_per_account=max_add_per_account, peer_flood_delay=peer_flood_delay_sec)
+        elif choice == "15":
+            await add_contacts_flow()
+        elif choice == "16":
+            await delete_contacts()
+        elif choice == "17":
+            accounts = load_accounts()
+            if not accounts:
+                console.print("[bold red]❌  No accounts loaded. Please add accounts to phone.csv[/bold red]")
+                Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+                continue
+            await collect_usernames(accounts)
+        elif choice == "18":
+            accounts = load_accounts()
+            if not accounts:
+                console.print("[bold red]❌  No accounts loaded. Please add accounts to phone.csv[/bold red]")
+                Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+                continue
+            await set_usernames(accounts)
+        elif choice == "19":
+            confirm = Prompt.ask("[red]Are you sure you want to delete usernames from accounts that have one? (y/n)[red]", choices=["y","n"])
+            if confirm == "y":
+                accounts = load_accounts()
+                if not accounts:
+                    console.print("[bold red]❌  No accounts loaded. Please add accounts to phone.csv[/bold red]")
+                    Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+                    continue
+                await delete_usernames(accounts)
+        elif choice == "20":
+            await update_tools()
+        elif choice == "21":
+            console.print(Panel(
+                "[bold green]Redirecting to Telegram chat with @khaled1261.[/bold green]",
+                title="Contact Developer",
+                style="green",
+                padding=(1, 4)
+            ))
+            Prompt.ask("[magenta]Press Enter to open Telegram and continue...[/magenta]", default="")
+            import webbrowser
+            # استخدم بروتوكول tg:// لفتح المحادثة مباشرة في تطبيق التلجرام
+            webbrowser.open("tg://user?id=1000746993")
+        elif choice == "22":
+            console.print("[cyan bold]Goodbye![/cyan bold]")
+            break
+        Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+
+if __name__ == "__main__":
+    try:
+        ensure_files_and_directories()
+        activation_system.load_or_generate_id()
+        is_activated = activation_system.check_activation()
+        if is_activated:
+            asyncio.run(main_menu())
+        else:
+            console.print(Panel(
+                "[bold yellow]Your Activation ID:[/bold yellow]\n"
+                f"[cyan]{activation_system.current_id}[/cyan]\n"
+                "Please send this ID to the developer for activation.",
+                title="Activation Required", 
+                style="yellow on black", 
+                padding=(1, 4)
+            ))
+            Prompt.ask("\n[magenta]Press Enter to exit...[/magenta]", default="")
+    except KeyboardInterrupt:
+        console.print("\nExiting...")
