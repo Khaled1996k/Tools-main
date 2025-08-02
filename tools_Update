@@ -89,11 +89,11 @@ GROUP_DATA_DIR = "groups_data"
 
 # Activation, subscription and update settings
 # ✅ تم تحديث الروابط إلى GitHub مع إزالة %2520 واستخدام روابط Raw مباشرة
-ACTIVATION_SERVER = "https://raw.githubusercontent.com/Khaled1996k/telegram-tools-updates/main/activation.txt"
-SUBSCRIPTION_SERVER = "https://raw.githubusercontent.com/Khaled1996k/telegram-tools-updates/main/subscriptions.txt"
-VERSION_SERVER = "https://raw.githubusercontent.com/Khaled1996k/telegram-tools-updates/main/version.txt"
-NEW_MAIN3_PY_DOWNLOAD_URL = "https://raw.githubusercontent.com/Khaled1996k/telegram-tools-updates/main/main3.py"
-CURRENT_VERSION = "1.0"  # ✅ تم تغيير الإصدار إلى 1.0
+ACTIVATION_SERVER = "https://raw.githubusercontent.com/Khaled1996k/Tools-main/refs/heads/main/activation.txt"
+SUBSCRIPTION_SERVER = "https://raw.githubusercontent.com/Khaled1996k/Tools-main/refs/heads/main/subscriptions.txt"
+VERSION_SERVER = "https://raw.githubusercontent.com/Khaled1996k/Tools-main/refs/heads/main/version.txt"
+NEW_MAIN3_PY_DOWNLOAD_URL = "https://raw.githubusercontent.com/Khaled1996k/Tools-main/refs/heads/main/tools_Update"
+CURRENT_VERSION = "3.0"
 CHECK_INTERVAL = 10800  # 3 hours
 UPDATE_GRACE_PERIOD = 172800  # 2 days in seconds (48 hours)
 
@@ -503,11 +503,11 @@ class ActivationSystem:
                 if current_status:
                     console.print("[green]Activation ID found on server. Your activation is valid![/green]")
                 else:
-                    console.print("[red]Failed to check activation.[/red]")  # ✅ إخفاء الرابط
+                    console.print("[red]Activation ID not found on server. Activation has been deactivated.[/red]")
                 self._last_activation_status = current_status
             return current_status
         except Exception as e:
-            console.print("[red]Failed to check activation.[/red]")  # ✅ إخفاء الرابط
+            console.print(f"[red]Failed to check activation: {e}[/red]")
             return False
 
     def check_subscription(self):
@@ -525,14 +525,14 @@ class ActivationSystem:
                 if current_status:
                     console.print("[green]Subscription found on server. You are subscribed![/green]")
                 else:
-                    console.print("[red]Failed to check subscription.[/red]")  # ✅ إخفاء الرابط
+                    console.print("[red]Subscription not found on server. You are not subscribed.[/red]")
                 self._last_subscription_status = current_status
             self.subscribed = current_status
             console.print(f"[bold yellow]DEBUG: Current Activation ID: {self.current_id}[/bold yellow]")
             console.print(f"[bold yellow]DEBUG: Subscription Status: {self.subscribed}[/bold yellow]")
             return current_status
         except Exception as e:
-            console.print("[red]Failed to check subscription.[/red]")  # ✅ إخفاء الرابط
+            console.print(f"[red]Failed to check subscription: {e}[/red]")
             self.subscribed = False
             return False
 
@@ -669,7 +669,16 @@ def activation_required():
         console.print(Panel(
             "[bold yellow]Your Activation ID:[/bold yellow]\n"
             f"[cyan]{activation_system.current_id}[/cyan]\n"
-            "Please send this ID to the developer for activation.",
+            "Please send this ID to the developer for activation.\n"
+            "✅ --- Developer Services --- ✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅\n"
+            "✅  23. Design & Development (Bots, Websites, Android Apps)             ✅\n"
+            "✅  24. Social Media Services (Members, Followers)                      ✅\n"
+            "✅  25. Account Sales (Telegram, WhatsApp, Facebook, Instagram, TikTok) ✅\n"
+            "✅  26. General Online Services & Digital Currencies                    ✅\n"
+            "✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅\n"
+            "28. Contact Developer via Telegram\n"
+            "29. Contact Developer (Open Contact Page)\n"
+            "30. Exit Application",
             title="Activation Required", 
             style="yellow on black", 
             padding=(1, 4)
@@ -2020,7 +2029,6 @@ async def main_menu():
         activation_system.save_local_activation()
         Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
 
-    empty_input_count = 0  # ✅ عداد لإغلاق الأداة بعد 3 محاولات فارغة
     while True:
         clear_screen()
         
@@ -2100,29 +2108,12 @@ async def main_menu():
         username_manager_content.append("[19] Delete Username from Accounts", style="light_sky_blue1")
         console.print(Panel(username_manager_content, title="[bold cyan]--- Username Manager ---[/bold cyan]", title_align="left", border_style="blue", padding=(0, 1), expand=False))
 
-        # ✅ عرض رسالة التحديث أسفل الخيار 20 إذا كان هناك تحديث
         console.print(Text("[20] Update Tools" + (" (New Version Available!)" if activation_system.new_update_available else ""), style="bold green"))
-        if activation_system.new_update_available:
-            console.print(Panel(
-                f"[bold green]A new update is available! Please select option 20 to update.\n"
-                f"Version {activation_system.latest_version} is ready.\n"
-                "Make sure you are subscribed first.",
-                title="Software Update Available",
-                style="bold green on black",
-                padding=(1, 4)
-            ))
         console.print(Text("[21] Contact Developer via Telegram", style="bold cyan"))
         console.print(Text("[22] Exit Application", style="bold red"))
 
         valid_choices = [str(i) for i in range(1, 23)]
         choice = Prompt.ask("[yellow]Enter your choice[/yellow]", choices=valid_choices)
-
-        if choice == "":
-            empty_input_count += 1
-            if empty_input_count >= 3:
-                console.print("[red]Exiting due to repeated empty inputs.[/red]")
-                sys.exit()
-            continue
 
         unrestricted_choices = ["21", "22"]
         if choice not in unrestricted_choices and not activation_system.subscribed:
@@ -2149,7 +2140,7 @@ async def main_menu():
             await run_account_check()
         elif choice == "5":
             await remove_account_from_phone_csv()
-        elif choice in ["6", "7", "8", "9", "10", "11", "12"]:
+        elif choice == "6":
             accounts = load_accounts()
             if not accounts:
                 console.print("[bold red]❌  No accounts loaded. Please add accounts to phone.csv[/bold red]")
@@ -2161,17 +2152,41 @@ async def main_menu():
                 Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
                 continue
             client = clients[0]
-            if choice == "6":
-                group = Prompt.ask("Enter target group/channel ID or username")
-                max_members_str = Prompt.ask("How many members do you want to scrape? (Leave empty for no limit)", default="")
-                max_members = int(max_members_str) if max_members_str.strip() else None
-                await scrape_active_members(client, group, max_members=max_members)
-            elif choice == "7":
-                group = Prompt.ask("Enter target group/channel ID or username")
-                max_members_str = Prompt.ask("How many members do you want to scrape? (Leave empty for no limit)", default="")
-                max_members = int(max_members_str) if max_members_str.strip() else None
-                await scrape_active_members_by_id(client, group, max_members=max_members)
-            elif choice == "8":
+            group = Prompt.ask("Enter target group/channel ID or username")
+            max_members_str = Prompt.ask("How many members do you want to scrape? (Leave empty for no limit)", default="")
+            max_members = int(max_members_str) if max_members_str.strip() else None
+            await scrape_active_members(client, group, max_members=max_members)
+            await client.disconnect()
+        elif choice == "7":
+            accounts = load_accounts()
+            if not accounts:
+                console.print("[bold red]❌  No accounts loaded. Please add accounts to phone.csv[/bold red]")
+                Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+                continue
+            clients = await login_accounts_multi(accounts, 1)
+            if not clients:
+                console.print("[bold red]❌  Login failed for all accounts.[/bold red]")
+                Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+                continue
+            client = clients[0]
+            group = Prompt.ask("Enter target group/channel ID or username")
+            max_members_str = Prompt.ask("How many members do you want to scrape? (Leave empty for no limit)", default="")
+            max_members = int(max_members_str) if max_members_str.strip() else None
+            await scrape_active_members_by_id(client, group, max_members=max_members)
+            await client.disconnect()
+        elif choice in ["8", "9", "10", "11", "12"]:
+            accounts = load_accounts()
+            if not accounts:
+                console.print("[bold red]❌  No accounts loaded. Please add accounts to phone.csv[/bold red]")
+                Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+                continue
+            clients = await login_accounts_multi(accounts, 1)
+            if not clients:
+                console.print("[bold red]❌  Login failed for all accounts.[/bold red]")
+                Prompt.ask("\n[magenta]Press Enter to continue...[/magenta]", default="")
+                continue
+            client = clients[0]
+            if choice == "8":
                 group = Prompt.ask("Enter target group/channel ID or username")
                 max_members_str = Prompt.ask("How many members do you want to scrape? (Leave empty for no limit)", default="")
                 max_members = int(max_members_str) if max_members_str.strip() else None
